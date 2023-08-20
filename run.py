@@ -1171,6 +1171,61 @@ def generate_app(
 
     return app
 
+def uvicorn_may_begin_shutdown(uvicorn_server):
+    uvicorn_server.should_exit = True # uvicorn のシャットダウン方法 
+
+def uvicorn_force_shutdown( uvicorn_server ):
+    uvicorn_server.force_exit = True 
+    
+async def wait_stdin(uvicorn_server):
+    loop = asyncio.get_event_loop()
+
+    while True :
+        line = await loop.run_in_executor(None, sys.stdin.readline)
+        if len(line) == 0:
+            break
+
+        stdin_input = line.strip()
+        #   入力の処理 今回は仕様外
+        # if stdin_input == "shutdown":
+        #     break
+        # if stdin_input == "ping":
+        #     print("pong")
+
+async def uvicorn_serve_and_wait_stdin_input( server ):
+    async def server_serve():
+        try:
+            await server.serve()
+        except:
+            #import traceback
+            #print( traceback.format_exc() )
+            pass # 例外が上がった時点で、修復不能なのでパスして関数を終了する。エラー内容は既にログに出力済み 
+    uvicorn_task = asyncio.create_task( server_serve() )
+    # uvicorn の立ち上がりを待機する （失敗を含めて）
+    await asyncio.sleep(0)
+
+    stdin_waiting_task = asyncio.create_task( wait_stdin(server) )
+
+    # uvicorn_task が例外を投げる場合（例えば、既にポートが占有済みで bind() に失敗した）があるので、
+    # asyncio.wait() で待つ、 stdin_waiting_task と uvicorn_task のうちどちらかが先に終わる場合に対応する
+    done, pending = await asyncio.wait( [stdin_waiting_task , uvicorn_task] , return_when=asyncio.FIRST_COMPLETED )
+
+    if uvicorn_task in pending :
+        try:
+            # uvicorn_server を シャットダウン状態にする
+            uvicorn_may_begin_shutdown(uvicorn_server)
+            await asyncio.wait_for( asyncio.shield( uvicorn_task ) , timeout=3 )
+        except asyncio.TimeoutError:
+            # タイムアウトまでに終わらないので force_exit フラグを立てる
+            try:
+                uvicorn_force_shutdown( server )
+                # 多分 このタイミングでは、lifespan の処理に入ってるので、何かしらの原因でブロックしているならばどうしようもないとは思う
+                await asyncio.wait_for( uvicorn_task , timeout=30)
+            except asyncio.TimeoutError:
+                # なんともならないので、終了する。
+                os._exit(1) 
+    if stdin_waiting_task in pending :
+        os._exit(1) # stdin の待機は同期readなので、unix では 割り込み winでは、CancelSynchronousIo() する必要があるのだが、大変面倒臭いので _exit する
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
@@ -1273,6 +1328,15 @@ if __name__ == "__main__":
         "--setting_file", type=Path, default=USER_SETTING_PATH, help="設定ファイルを指定できます。"
     )
 
+    parser.add_argument(
+        "--enable-shutdown-on-close-stdin" ,
+        action='store_const',
+        const=True,
+        help=(
+            "標準入力が閉じられた時にプロセスを終了します"
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.output_log_utf8:
@@ -1314,15 +1378,21 @@ if __name__ == "__main__":
     elif settings.allow_origin is not None:
         allow_origin = settings.allow_origin.split(" ")
 
-    uvicorn.run(
-        generate_app(
-            synthesis_engines,
-            latest_core_version,
-            setting_loader,
-            root_dir=root_dir,
-            cors_policy_mode=cors_policy_mode,
-            allow_origin=allow_origin,
-        ),
+    uvicorn_config = uvicorn.Config(generate_app(
+        synthesis_engines,
+        latest_core_version,
+        setting_loader,
+        root_dir=root_dir,
+        cors_policy_mode=cors_policy_mode,
+        allow_origin=allow_origin,
+    ) ,
         host=args.host,
         port=args.port,
     )
+    
+    uvicorn_server = uvicorn.Server( uvicorn_config )
+
+    if args.enable_shutdown_on_close_stdin:
+        asyncio.run( uvicorn_serve_and_wait_stdin_input( uvicorn_server ) )
+    else:
+        uvicorn_server.run()
