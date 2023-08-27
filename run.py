@@ -1393,7 +1393,7 @@ if __name__ == "__main__":
     
     uvicorn_server = uvicorn.Server( uvicorn_config )
 
-    if args.enable_shutdown_on_close_stdin:
+    if args.enable_exit_on_close_stdin:
         asyncio.run( uvicorn_serve_and_wait_stdin_input( uvicorn_server ) )
     else:
         uvicorn_server.run()
