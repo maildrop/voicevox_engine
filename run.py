@@ -1329,7 +1329,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--enable-shutdown-on-close-stdin" ,
+        "--enable_exit_on_close_stdin" ,
         action='store_const',
         const=True,
         help=(
@@ -1378,14 +1378,15 @@ if __name__ == "__main__":
     elif settings.allow_origin is not None:
         allow_origin = settings.allow_origin.split(" ")
 
-    uvicorn_config = uvicorn.Config(generate_app(
-        synthesis_engines,
-        latest_core_version,
-        setting_loader,
-        root_dir=root_dir,
-        cors_policy_mode=cors_policy_mode,
-        allow_origin=allow_origin,
-    ) ,
+    uvicorn_config = uvicorn.Config(
+        generate_app(
+            synthesis_engines,
+            latest_core_version,
+            setting_loader,
+            root_dir=root_dir,
+            cors_policy_mode=cors_policy_mode,
+            allow_origin=allow_origin,
+        ) ,
         host=args.host,
         port=args.port,
     )
